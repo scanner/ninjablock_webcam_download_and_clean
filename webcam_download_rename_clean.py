@@ -82,7 +82,7 @@ def cl_arguments():
     parser.add_argument("-d", "--dir", help="Directory to download new images"
                         "to", default = "/tmp/webcam")
     parser.add_argument("-i", "--interval", help="The interval in seconds "
-                        "between runs", default = 300, type=int)
+                        "between runs", default = 30, type=int)
     return parser
 
 ####################################################################
@@ -449,6 +449,7 @@ def main():
         if cur_dir_hash == last_dir_hash:
             print "** Skipping loop. No changes in folder '%s'" % \
                 args.dropbox_folder
+            sleep(args.interval)
             continue
 
         # First step rename all the files that have the old file pattern.
@@ -462,7 +463,7 @@ def main():
         # changing its hash)
         #
         print "** Downloading new files"
-        cur_dir_hash, files = get_dropbox_dir(client, args.dropbox_folder)
+        last_dir_hash, files = get_dropbox_dir(client, args.dropbox_folder)
         download_new_files(client, args.dropbox_folder, args.dir, files, latest,
                            args.dry_run)
 
