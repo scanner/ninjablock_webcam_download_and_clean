@@ -31,12 +31,30 @@ file. All hail 'pip install -r ./requirements.txt' + virtualenvs!
 # system imports
 #
 import argparse
+import glob
 import ConfigParser
+import re
+import os
+from time import sleep
 
 # 3rd party imports
 #
 import dropbox
 import arrow
+
+# The regular expression to match which files we will rename to make
+# sure we only bother re-naming ones we intend to.
+#
+FNAMES_TO_MATCH_re = re.compile(r'^(?P<weekday>\w\w\w), (?P<day>\d\d) (?P<month>\w\w\w) (?P<year>\d\d\d\d) (?P<hour>\d\d):(?P<minute>\d\d):(?P<second>\d\d) (?P<tz>\w\w\w)\.jpg$')
+
+# The regexp for a renamed image file.
+#
+DATE_FNAME_re = re.compile(r'^\d\d\d\d-\d\d-\d\dT\d\d_\d\d_\d\d-0000\.jpg$')
+
+# the timestamp format used to parse and format our timestamp file names by
+# arrow.
+#
+arrow_timestamp_fmt="YYYY-MM-DDTHH_mm_ssZ"
 
 ####################################################################
 #
@@ -53,6 +71,18 @@ def cl_arguments():
     parser.add_argument("-n", "--dry_run", help="Do a dry run. Print out the "
                         "things we would do, but do not actually do them",
                         action = "store_true")
+    parser.add_argument("--delete", help="Do the step where we "
+                        "delete files older than a certain date",
+                        action = "store_true")
+    parser.add_argument("--expiry", help="The amount of time before we delete "
+                        "old files in days", default = 7, type=int)
+    parser.add_argument("-f", "--dropbox_folder", help="The folder in the "
+                        "dropbox account that we are monitoring",
+                        default = "/Apps/Ninja Blocks/")
+    parser.add_argument("-d", "--dir", help="Directory to download new images"
+                        "to", default = "/tmp/webcam")
+    parser.add_argument("-i", "--interval", help="The interval in seconds "
+                        "between runs", default = 300, type=int)
     return parser
 
 ####################################################################
@@ -107,7 +137,7 @@ def find_latest_downloaded_file(data_dirname):
 
     We assume that the files have same naming convention:
 
-    <DATA DIR>/<yyyy>/<yyyy-mm-dd>/<yyyy.mm.dd-hh:mm:ss>.jpg
+    <DATA DIR>/<yyyy>/<yyyy-mm-dd>/<DATE_FNAME_re>
 
     Instead of using a directory walk all we need to do is find the latest year
     directory, and then the latest date directory within that year and then the
@@ -164,6 +194,149 @@ def find_latest_downloaded_file(data_dirname):
     #
     return None, None, None
 
+####################################################################
+#
+def get_dropbox_dir(client, db_folder):
+    """
+    Get the contents of a dropbox folder and its current hash.
+
+    We only care about the file names in the folder and its current hash so we
+    do not deal with the other metadata.
+
+    XXX Since we are dealing with just images maybe we should restrict the list
+        of files we return to ones that are images?
+
+    Arguments:
+    - `client`: A dropbox client
+    - `db_folder`: The folder we want the contents of
+    """
+    folder_metadata = client.metadata(db_folder)
+    files = []
+    for f in folder_metadata['contents']:
+
+        # Skip over directories
+        #
+        if f['is_dir']:
+            continue
+
+        files.append(os.path.basename(f['path']))
+
+    return folder_metadata['hash'], files
+
+####################################################################
+#
+def rename_dropbox_files(client, db_folder, files, dry_run):
+    """
+    Go through the files that are in the given dropbox folder, as passed in
+    via the 'files' list. Filter out all the files that do not match our
+    regular expression for the files we are going to rename, and then rename
+    them in to sortable date based file names (the date we derive from their
+    existing file name.)
+
+    Arguments:
+    - `client`: The dropbox client
+    - `db_folder`: The dropbox folder we are operating in
+    - `files`: The list of files from that dropbox folder
+    """
+    for fname in files:
+        match = FNAMES_TO_MATCH_re.search(fname)
+
+        # Skip over this loop if this file does not match our pattern.
+        #
+        if match is None:
+            continue
+
+        # The file name actually is alreay date based.. but it is just not
+        # easily sortable so we want to convert it to a yyyy.mm.dd-hh:mm:ss
+        # format for that reason.
+        #
+        d = arrow.get(str(fname[5:-4]),"DD MMM YYYY HH:mm:ss")
+        new_fname = "%s.jpg" % d.format(arrow_timestamp_fmt)
+        print "Renaming '%s' to '%s'" % (fname, new_fname)
+
+        # If we are doing a dry-run skip to the next file here..
+        #
+        if dry_run:
+            continue
+
+        client.file_move(os.path.join(db_folder, fname),
+                         os.path.join(db_folder, new_fname))
+    return
+
+####################################################################
+#
+def download_new_files(client, db_folder, dest_dir, files, when, dry_run):
+    """
+    Download all of the files in the db_folder that are newer than 'when' that
+    match our download pattern.
+
+    Arguments:
+    - `client`: Dropbox client
+    - `db_folder`: Dropbox folder we are downloading from
+    - `dest_dir`: The root destination directory to copy the files in to. The
+                  sub-directory for the year, month, and day will be created
+                  as necessary.
+    - `files`: Use this list of files to decide what to download
+    - `when`: An arrow timestamp. Download all files that were created after
+              this timestamp.
+    - `dry_run`: a boolean. If true then no actual actions are performed
+    """
+
+    # Going through the list of files only download ones that are after 'when'
+    # and conform to our file name pattern.
+    #
+    for fname in files:
+        # only download files that match our timestamp format
+        #
+        fname = str(fname)
+        if DATE_FNAME_re.search(fname) is None:
+            continue
+
+        # Only download files that were created after 'when'
+        #
+        f_time = arrow.get(fname, arrow_timestamp_fmt)
+        if f_time <= when:
+            continue
+
+        destination_dir = os.path.join(dest_dir, "%d" % f_time.year,
+                                       f_time.format('YYYY-MM-DD'))
+        destination_fname = os.path.join(destination_dir, fname)
+        print "Downloading %s to %s" % (fname, destination_fname)
+
+        # Wen doing a dry-run do not actually download the file.
+        #
+        if dry_run:
+            continue
+
+        # Make sure the destination directory exists and write out the file.
+        #
+        if not os.path.exists(destination_dir):
+            os.makedirs(destination_dir)
+
+        f, metadata = client.get_file_and_metadata(os.path.join(db_folder,
+                                                                fname))
+        out = open(destination_fname, 'wb')
+        out.write(f.read())
+        out.close()
+        print "** Done downloading %s" % fname
+    return
+
+####################################################################
+#
+def delete_old_files(client, db_folder, files, expiry, dry_run):
+    """
+    In the given dropbox folder delete all files that match our download file
+    pattern whose creation time is older than 'now-expiry'
+
+    Arguments:
+    - `client`: The dropbox client
+    - `db_folder`: The dropbox folder we are deleting files from
+    - `files`: The list of all the files we are going to consider
+    - `expiry`: An arrow timestamp that the files must be older than in order
+                to be considered for deletion.
+    """
+    pass
+
 #############################################################################
 #
 def main():
@@ -219,6 +392,20 @@ def main():
     #
     img_file, date_dir, year_dir = find_latest_downloaded_file(args.dir)
 
+    # Convert the image file name in to a timestamp. I am going to be lazy and
+    # just assume that the file name is in the proper format.
+    #
+    if img_file is not None:
+        latest = arrow.get(img_file, arrow_timestamp_fmt)
+    else:
+        # Guess we better not have images older than the unix epoch..
+        #
+        latest = arrow.get(0)
+
+    # Get the horizon beyond which in the past we delete old files
+    #
+    then = arrow.utcnow().replace(days=-args.expiry)
+
     # Now that we have a session establish a client connection to dropbox and
     # begin our loop interogating the contents of this directory, renaming
     # files to a friendlier name for listingin order, downloading new files,
@@ -230,7 +417,66 @@ def main():
     #
     client = dropbox.client.DropboxClient(sess)
 
-    print "linked account:", client.account_info()
+    # Dropbox returns a hash when we get the metadata for a directory that
+    # tells us if anything in the directory has changed. This lets us quickly
+    # know nothing has changed and skip the rest of the steps in one
+    # loop. Since it starts out as 'None' the first time through will always do
+    # all the steps.
+    #
+    last_dir_hash = None
+
+    # And start our main loop that will go through the three tasks:
+    # o rename files to date based names
+    # o download all new files to the download directory
+    # o remove files from dropbox that are older than the time period.
+    #
+    running = True
+
+    while running:
+        # If we are doing a 'one run' then we immediate set 'running'
+        # to false once we enter the loop so the loop will only run
+        # once.
+        #
+        if args.one_run:
+            running = false
+
+        # Get the list of files and the hash directory we are watching. We can
+        # skip the rest of this loop if the current directory hash is the same
+        # as the last directory hash meaning nothing in this directory has
+        # changed since the last time we asked.
+        #
+        cur_dir_hash, files = get_dropbox_dir(client, args.dropbox_folder)
+        if cur_dir_hash == last_dir_hash:
+            print "** Skipping loop. No changes in folder '%s'" % \
+                args.dropbox_folder
+            continue
+
+        # First step rename all the files that have the old file pattern.
+        #
+        print "** Renaming existing files"
+        rename_dropbox_files(client, args.dropbox_folder, files, args.dry_run)
+
+        # Second step, download all files that have appeared since the last
+        # time we ran. We need to get the list of files again since we just
+        # changed the contents of the directory by renaming files (and also
+        # changing its hash)
+        #
+        print "** Downloading new files"
+        cur_dir_hash, files = get_dropbox_dir(client, args.dropbox_folder)
+        download_new_files(client, args.dropbox_folder, args.dir, files, latest,
+                           args.dry_run)
+
+        # Finally (if '--delete' is set), delete files that are older a set
+        # time (by default 7 days.)
+        #
+        if args.delete:
+            print "** Deleted old files"
+            delete_old_files(client, args.dropbox_folder, then, args.dry_run)
+
+        print "*** %s Done run. Sleeping for %d" % (arrow.now().format('YYYY-MM-DD HH:mm:ss ZZ'),args.interval)
+        sleep(args.interval)
+
+    print "+*+* Exiting main loop"
     return
 
 ############################################################################
