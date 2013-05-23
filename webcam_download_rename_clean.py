@@ -72,8 +72,8 @@ def cl_arguments():
                         "things we would do, but do not actually do them",
                         action = "store_true")
     parser.add_argument("--delete", help="Do the step where we "
-                        "delete files older than a certain date",
-                        action = "store_true")
+                        "delete files older than a certain date (see the "
+                        "'--expiry' option)", action = "store_true")
     parser.add_argument("--expiry", help="The amount of time before we delete "
                         "old files in days", default = 7, type=int)
     parser.add_argument("-f", "--dropbox_folder", help="The folder in the "
@@ -286,7 +286,9 @@ def download_new_files(client, db_folder, dest_dir, files, when, dry_run):
     # and conform to our file name pattern.
     #
     for fname in files:
-        # only download files that match our timestamp format
+        # only download files that match our timestamp format. We want to force
+        # the file names to be strings (not unicode) for safety of other
+        # manipulations.
         #
         fname = str(fname)
         if DATE_FNAME_re.search(fname) is None:
@@ -328,14 +330,55 @@ def delete_old_files(client, db_folder, files, expiry, dry_run):
     In the given dropbox folder delete all files that match our download file
     pattern whose creation time is older than 'now-expiry'
 
+    NOTE: We only consider files that are in our 'files' array. We expect the
+    calls to be close enough together that there is no real reason to make an
+    additional call to Dropbox to get the list of files.
+
+    And if we do not delete some files this run that we delete on the next run
+    that is fine anyways.
+
+    We are going to use the file's name as the determination of its creation
+    time. We can do this because we have renamed all the files we care about to
+    have this name format.
+
+    This also makes sure that we are only deleting files that we actually want
+    to delete.
+
     Arguments:
     - `client`: The dropbox client
     - `db_folder`: The dropbox folder we are deleting files from
     - `files`: The list of all the files we are going to consider
     - `expiry`: An arrow timestamp that the files must be older than in order
                 to be considered for deletion.
+    - `dry_run`: a boolean. If true then no actual actions are performed
     """
-    pass
+    # Going through the list of files only delete ones that are before 'expiry'
+    # and conform to our file name pattern.
+    #
+    for fname in files:
+        # only delete files that match our timestamp format. We want to force
+        # the file names to be strings (not unicode) for safety of other
+        # manipulations.
+        #
+        fname = str(fname)
+        if DATE_FNAME_re.search(fname) is None:
+            continue
+
+        # Only download files that were created after 'when'
+        #
+        f_time = arrow.get(fname, arrow_timestamp_fmt)
+        if f_time > expiry:
+            continue
+        print "** Deleting file '%s'" % fname
+        if not dry_run:
+            try:
+                client.file_delete(os.path.join(db_folder, fname))
+            except dropbox.rest.ErrorResponse, e:
+                # It is okay if this file does not exist..
+                #
+                if e.status != 404:
+                    raise(e)
+    return
 
 #############################################################################
 #
@@ -402,7 +445,7 @@ def main():
         #
         latest = arrow.get(0)
 
-    # Get the horizon beyond which in the past we delete old files
+    # Get the horizon in the past beyond which in the past we delete old files
     #
     then = arrow.utcnow().replace(days=-args.expiry)
 
@@ -433,13 +476,6 @@ def main():
     running = True
 
     while running:
-        # If we are doing a 'one run' then we immediate set 'running'
-        # to false once we enter the loop so the loop will only run
-        # once.
-        #
-        if args.one_run:
-            running = false
-
         # Get the list of files and the hash directory we are watching. We can
         # skip the rest of this loop if the current directory hash is the same
         # as the last directory hash meaning nothing in this directory has
@@ -471,11 +507,19 @@ def main():
         # time (by default 7 days.)
         #
         if args.delete:
-            print "** Deleted old files"
-            delete_old_files(client, args.dropbox_folder, then, args.dry_run)
+            print "** Deleteing old files"
+            delete_old_files(client, args.dropbox_folder, files, then,
+                             args.dry_run)
 
-        print "*** %s Done run. Sleeping for %d" % (arrow.now().format('YYYY-MM-DD HH:mm:ss ZZ'),args.interval)
-        sleep(args.interval)
+        # If we are doing a 'one run' then we immediate set 'running'
+        # to false once we enter the loop so the loop will only run
+        # once. Otherwise sleep..
+        #
+        if args.one_run:
+            running = False
+        else:
+            print "*** %s Done run. Sleeping for %d" % (arrow.now().format('YYYY-MM-DD HH:mm:ss ZZ'),args.interval)
+            sleep(args.interval)
 
     print "+*+* Exiting main loop"
     return
