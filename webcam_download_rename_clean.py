@@ -259,8 +259,18 @@ def rename_dropbox_files(client, db_folder, files, dry_run):
         if dry_run:
             continue
 
-        client.file_move(os.path.join(db_folder, fname),
-                         os.path.join(db_folder, new_fname))
+        try:
+            client.file_move(os.path.join(db_folder, fname),
+                             os.path.join(db_folder, new_fname))
+        except dropbox.rest.ErrorResponse, e:
+            # It is okay if this file does not exist (means that it
+            # was deleted before we could get to copying it..)
+            #
+            if e.status != 404:
+                raise(e)
+            else:
+                print "File '%s' was deleted before we could rename it" % \
+                    fname
     return
 
 ####################################################################
@@ -315,12 +325,23 @@ def download_new_files(client, db_folder, dest_dir, files, when, dry_run):
         if not os.path.exists(destination_dir):
             os.makedirs(destination_dir)
 
-        f, metadata = client.get_file_and_metadata(os.path.join(db_folder,
-                                                                fname))
-        out = open(destination_fname, 'wb')
-        out.write(f.read())
-        out.close()
-        print "** Done downloading %s" % fname
+        try:
+            f, metadata = client.get_file_and_metadata(os.path.join(db_folder,
+                                                                    fname))
+            out = open(destination_fname, 'wb')
+            out.write(f.read())
+            out.close()
+        except dropbox.rest.ErrorResponse, e:
+            # It is okay if this file does not exist (means that it
+            # was deleted before we could get to copying it..)
+            #
+            if e.status != 404:
+                raise(e)
+            else:
+                print "** File '%s' was deleted from the dropbox before we "
+                "could download it" % fname
+        else:
+            print "** Done downloading %s" % fname
     return
 
 ####################################################################
