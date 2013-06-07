@@ -502,35 +502,43 @@ def main():
         # as the last directory hash meaning nothing in this directory has
         # changed since the last time we asked.
         #
-        cur_dir_hash, files = get_dropbox_dir(client, args.dropbox_folder)
-        if cur_dir_hash == last_dir_hash:
-            print "** Skipping loop. No changes in folder '%s'" % \
-                args.dropbox_folder
-            sleep(args.interval)
-            continue
+        try:
+            cur_dir_hash, files = get_dropbox_dir(client, args.dropbox_folder)
+            if cur_dir_hash == last_dir_hash:
+                print "** Skipping loop. No changes in folder '%s'" % \
+                    args.dropbox_folder
+                sleep(args.interval)
+                continue
 
-        # First step rename all the files that have the old file pattern.
-        #
-        print "** Renaming existing files"
-        rename_dropbox_files(client, args.dropbox_folder, files, args.dry_run)
+            # First step rename all the files that have the old file pattern.
+            #
+            print "** Renaming existing files"
+            rename_dropbox_files(client, args.dropbox_folder, files, args.dry_run)
 
-        # Second step, download all files that have appeared since the last
-        # time we ran. We need to get the list of files again since we just
-        # changed the contents of the directory by renaming files (and also
-        # changing its hash)
-        #
-        print "** Downloading new files"
-        last_dir_hash, files = get_dropbox_dir(client, args.dropbox_folder)
-        download_new_files(client, args.dropbox_folder, args.dir, files, latest,
-                           args.dry_run)
+            # Second step, download all files that have appeared since the last
+            # time we ran. We need to get the list of files again since we just
+            # changed the contents of the directory by renaming files (and also
+            # changing its hash)
+            #
+            print "** Downloading new files"
+            last_dir_hash, files = get_dropbox_dir(client, args.dropbox_folder)
+            download_new_files(client, args.dropbox_folder, args.dir, files, latest,
+                               args.dry_run)
 
-        # Finally (if '--delete' is set), delete files that are older a set
-        # time (by default 7 days.)
-        #
-        if args.delete:
-            print "** Deleteing old files"
-            delete_old_files(client, args.dropbox_folder, files, then,
-                             args.dry_run)
+            # Finally (if '--delete' is set), delete files that are older a set
+            # time (by default 7 days.)
+            #
+            if args.delete:
+                print "** Deleteing old files"
+                delete_old_files(client, args.dropbox_folder, files, then,
+                                 args.dry_run)
+        except dropbox.rest.RESTSocketError, e:
+            # If we get a timeout, just continue on..
+            #
+            if e.status != 60:
+                raise(e)
+            else:
+                print "** Connection to dropbox timed out."
 
         # If we are doing a 'one run' then we immediate set 'running'
         # to false once we enter the loop so the loop will only run
