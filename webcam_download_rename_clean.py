@@ -338,8 +338,8 @@ def download_new_files(client, db_folder, dest_dir, files, when, dry_run):
             if e.status != 404:
                 raise(e)
             else:
-                print "** File '%s' was deleted from the dropbox before we "
-                "could download it" % fname
+                print "** File '%s' was deleted from the dropbox before we " \
+                    "could download it" % fname
         else:
             print "** Done downloading %s" % fname
     return
