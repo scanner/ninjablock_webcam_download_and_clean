@@ -452,24 +452,6 @@ def main():
         sess.set_token(config.get("general", "access_token"),
                        config.get("general", "access_token_secret"))
 
-    # Find the latest image file that we have already downloaded
-    #
-    img_file, date_dir, year_dir = find_latest_downloaded_file(args.dir)
-
-    # Convert the image file name in to a timestamp. I am going to be lazy and
-    # just assume that the file name is in the proper format.
-    #
-    if img_file is not None:
-        latest = arrow.get(img_file, arrow_timestamp_fmt)
-    else:
-        # Guess we better not have images older than the unix epoch..
-        #
-        latest = arrow.get(0)
-
-    # Get the horizon in the past beyond which in the past we delete old files
-    #
-    then = arrow.utcnow().replace(days=-args.expiry)
-
     # Now that we have a session establish a client connection to dropbox and
     # begin our loop interogating the contents of this directory, renaming
     # files to a friendlier name for listingin order, downloading new files,
@@ -497,6 +479,25 @@ def main():
     running = True
 
     while running:
+        # Get the horizon in the past beyond which in the past we delete old
+        # files
+        #
+        then = arrow.utcnow().replace(days=-args.expiry)
+
+        # Find the latest image file that we have already downloaded
+        #
+        img_file, date_dir, year_dir = find_latest_downloaded_file(args.dir)
+
+        # Convert the image file name in to a timestamp. I am going to be lazy
+        # and just assume that the file name is in the proper format.
+        #
+        if img_file is not None:
+            latest = arrow.get(img_file, arrow_timestamp_fmt)
+        else:
+            # Guess we better not have images older than the unix epoch..
+            #
+            latest = arrow.get(0)
+
         # Get the list of files and the hash directory we are watching. We can
         # skip the rest of this loop if the current directory hash is the same
         # as the last directory hash meaning nothing in this directory has
@@ -513,7 +514,8 @@ def main():
             # First step rename all the files that have the old file pattern.
             #
             print "** Renaming existing files"
-            rename_dropbox_files(client, args.dropbox_folder, files, args.dry_run)
+            rename_dropbox_files(client, args.dropbox_folder, files,
+                                 args.dry_run)
 
             # Second step, download all files that have appeared since the last
             # time we ran. We need to get the list of files again since we just
@@ -522,8 +524,8 @@ def main():
             #
             print "** Downloading new files"
             last_dir_hash, files = get_dropbox_dir(client, args.dropbox_folder)
-            download_new_files(client, args.dropbox_folder, args.dir, files, latest,
-                               args.dry_run)
+            download_new_files(client, args.dropbox_folder, args.dir, files,
+                               latest, args.dry_run)
 
             # Finally (if '--delete' is set), delete files that are older a set
             # time (by default 7 days.)
