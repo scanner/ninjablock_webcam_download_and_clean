@@ -267,7 +267,7 @@ def rename_dropbox_files(client, db_folder, files, dry_run):
             # was deleted before we could get to copying it..)
             #
             if e.status != 404:
-                raise(e)
+                raise e
             else:
                 print "File '%s' was deleted before we could rename it" % \
                     fname
@@ -336,7 +336,7 @@ def download_new_files(client, db_folder, dest_dir, files, when, dry_run):
             # was deleted before we could get to copying it..)
             #
             if e.status != 404:
-                raise(e)
+                raise e
             else:
                 print "** File '%s' was deleted from the dropbox before we " \
                     "could download it" % fname
@@ -398,7 +398,7 @@ def delete_old_files(client, db_folder, files, expiry, dry_run):
                 # It is okay if this file does not exist..
                 #
                 if e.status != 404:
-                    raise(e)
+                    raise e
     return
 
 #############################################################################
@@ -534,11 +534,20 @@ def main():
                 print "** Deleteing old files"
                 delete_old_files(client, args.dropbox_folder, files, then,
                                  args.dry_run)
+        except dropbox.rest.ErrorResponse, e:
+            # If we got anything but a 200 raise an exception (why did
+            # we get a 200?)
+            #
+            if e.status != 200:
+                print "** Wuh? Got dropbox.rest.ErrorResponse: %s" % str(e)
+                raise e
+            else:
+                print "** huh. Got dropbox.rest.ErrorResponse: %s" % str(e)
         except dropbox.rest.RESTSocketError, e:
             # If we get a timeout, just continue on..
             #
-            if e.status != 60:
-                raise(e)
+            if e.errno != 60:
+                raise e
             else:
                 print "** Connection to dropbox timed out."
 
