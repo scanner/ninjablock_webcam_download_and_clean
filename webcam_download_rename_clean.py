@@ -538,7 +538,7 @@ def main():
             # If we got anything but a 200 raise an exception (why did
             # we get a 200?)
             #
-            if e.status != 200:
+            if e.status not in (200,500):
                 print "** Wuh? Got dropbox.rest.ErrorResponse: %s" % str(e)
                 raise e
             else:
