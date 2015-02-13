@@ -26,11 +26,34 @@ script at this time.
 
 NOTE: We depend on the python modules listed in the 'requirements.txt'
 file. All hail 'pip install -r ./requirements.txt' + virtualenvs!
+
+Usage:
+  webcam_download_rename_clean.py [options]
+  webcam_download_rename_clean.py (-h | --help | --version)
+
+Options:
+  --version
+  -h, --help                  Show this text and exit
+  -c <file>, --config=<file>  Config [default: /usr/local/etc/webcam_db.conf]
+  --one_run                   Instead of entering a loop  and running forever
+                              just do one run through the main loop.
+  -n, --dry_run               Do a dry run. Print out the things we would do,
+                              but do not actually do them.
+  --delete                    Do the step where we delete files older than a
+                              certain date (see the '--expiry' option).
+  --expiry                    The amount of time before we delete old files
+                              in days. [default: 7]
+  -f <dir>, --dropbox_folder=<dir>  The folder in the dropbox account that
+                                    we are monitoring.
+                                    [default: /Apps/Ninja Blocks/]
+  -d <dir>, --dir=<dir>       Directory to download new images to
+                              [default: /tmp/webcam]
+  -i <s>, --interval=<s>      The interval in seconds between runs
+                              [default: 30]
 """
 
 # system imports
 #
-import argparse
 import glob
 import ConfigParser
 import re
@@ -41,11 +64,17 @@ from time import sleep
 #
 import dropbox
 import arrow
+from docopt import docopt
+
+__version__ = "1.0.1"
 
 # The regular expression to match which files we will rename to make
 # sure we only bother re-naming ones we intend to.
 #
-FNAMES_TO_MATCH_re = re.compile(r'^(?P<weekday>\w\w\w), (?P<day>\d\d) (?P<month>\w\w\w) (?P<year>\d\d\d\d) (?P<hour>\d\d):(?P<minute>\d\d):(?P<second>\d\d) (?P<tz>\w\w\w)\.jpg$')
+FNAMES_TO_MATCH_re = re.compile(r'^(?P<weekday>\w\w\w), (?P<day>\d\d) '
+                                '(?P<month>\w\w\w) (?P<year>\d\d\d\d) '
+                                '(?P<hour>\d\d):(?P<minute>\d\d):'
+                                '(?P<second>\d\d) (?P<tz>\w\w\w)\.jpg$')
 
 # The regexp for a renamed image file.
 #
@@ -54,40 +83,12 @@ DATE_FNAME_re = re.compile(r'^\d\d\d\d-\d\d-\d\dT\d\d_\d\d_\d\d-0000\.jpg$')
 # the timestamp format used to parse and format our timestamp file names by
 # arrow.
 #
-arrow_timestamp_fmt="YYYY-MM-DDTHH_mm_ssZ"
+arrow_timestamp_fmt = "YYYY-MM-DDTHH_mm_ssZ"
+
 
 ####################################################################
 #
-def cl_arguments():
-    """
-    Return the command line argument parser.
-    """
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-c", "--config", help="Config file",
-                        default = "/usr/local/etc/webcam_db.conf")
-    parser.add_argument("--one_run", help="Instead of entering a loop "
-                        "and running forever just do one run through the main "
-                        "loop", action = "store_true")
-    parser.add_argument("-n", "--dry_run", help="Do a dry run. Print out the "
-                        "things we would do, but do not actually do them",
-                        action = "store_true")
-    parser.add_argument("--delete", help="Do the step where we "
-                        "delete files older than a certain date (see the "
-                        "'--expiry' option)", action = "store_true")
-    parser.add_argument("--expiry", help="The amount of time before we delete "
-                        "old files in days", default = 7, type=int)
-    parser.add_argument("-f", "--dropbox_folder", help="The folder in the "
-                        "dropbox account that we are monitoring",
-                        default = "/Apps/Ninja Blocks/")
-    parser.add_argument("-d", "--dir", help="Directory to download new images"
-                        "to", default = "/tmp/webcam")
-    parser.add_argument("-i", "--interval", help="The interval in seconds "
-                        "between runs", default = 30, type=int)
-    return parser
-
-####################################################################
-#
-def do_oauth_setup(sess, callback_url = None):
+def do_oauth_setup(sess, callback_url=None):
     """
     Construct a request token and print out the generated URL for the user to
     navigate to in their browser.
@@ -112,7 +113,8 @@ def do_oauth_setup(sess, callback_url = None):
     url = sess.build_authorize_url(request_token,
                                    oauth_callback=callback_url)
     print "url:", url
-    print "Please visit this website and press the 'Allow' button, then hit 'Enter' here."
+    print ("Please visit this website and press the 'Allow' button, then hit "
+           "'Enter' here.")
     raw_input()
 
     # To quote the tutorial from dropbox: "To avoid the hassle of setting up a
@@ -127,6 +129,7 @@ def do_oauth_setup(sess, callback_url = None):
     #
     access_token = sess.obtain_access_token(request_token)
     return access_token
+
 
 ####################################################################
 #
@@ -156,13 +159,16 @@ def find_latest_downloaded_file(data_dirname):
 
     # Go backwards from the most recent year directory we find..
     #
-    year_dirs.sort(reverse = True)
+    year_dirs.sort(reverse=True)
 
     for year_dir in year_dirs:
 
-        date_dirs = glob.glob(os.path.join(year_dir, "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]"))
+        date_dirs = glob.glob(
+            os.path.join(year_dir,
+                         "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]")
+        )
 
-        date_dirs.sort(reverse = True)
+        date_dirs.sort(reverse=True)
 
         if len(date_dirs) == 0:
             # This year has no date dirs.. goto the next (earlier) year dir
@@ -194,6 +200,7 @@ def find_latest_downloaded_file(data_dirname):
     #
     return None, None, None
 
+
 ####################################################################
 #
 def get_dropbox_dir(client, db_folder):
@@ -223,6 +230,7 @@ def get_dropbox_dir(client, db_folder):
 
     return folder_metadata['hash'], files
 
+
 ####################################################################
 #
 def rename_dropbox_files(client, db_folder, files, dry_run):
@@ -250,7 +258,7 @@ def rename_dropbox_files(client, db_folder, files, dry_run):
         # easily sortable so we want to convert it to a yyyy.mm.dd-hh:mm:ss
         # format for that reason.
         #
-        d = arrow.get(str(fname[5:-4]),"DD MMM YYYY HH:mm:ss")
+        d = arrow.get(str(fname[5:-4]), "DD MMM YYYY HH:mm:ss")
         new_fname = "%s.jpg" % d.format(arrow_timestamp_fmt)
         print "Renaming '%s' to '%s'" % (fname, new_fname)
 
@@ -272,6 +280,7 @@ def rename_dropbox_files(client, db_folder, files, dry_run):
                 print "File '%s' was deleted before we could rename it" % \
                     fname
     return
+
 
 ####################################################################
 #
@@ -344,6 +353,7 @@ def download_new_files(client, db_folder, dest_dir, files, when, dry_run):
             print "** Done downloading %s" % fname
     return
 
+
 ####################################################################
 #
 def delete_old_files(client, db_folder, files, expiry, dry_run):
@@ -401,6 +411,7 @@ def delete_old_files(client, db_folder, files, expiry, dry_run):
                     raise e
     return
 
+
 #############################################################################
 #
 def main():
@@ -418,13 +429,16 @@ def main():
     o delete files from the dropbox folder that are older than a certain time
 
     """
-    args = cl_arguments().parse_args()
+    args = docopt(__doc__, version=__version__)
+    dropbox_folder = args['--dropbox_folder']
+    expiry = int(args['--expiry'])
+    interval = int(args['--interval'])
 
     # Read in the config. We need this no matter what so we can get the
     # app key and app secret key.
     #
     config = ConfigParser.SafeConfigParser()
-    config.read(args.config)
+    config.read(args['--config'])
 
     # Setup our dropbox session. We use the app_key and app_secret we got from
     # the config file. This is a 'dropbox' app instead of an 'app folder' app.
@@ -446,7 +460,7 @@ def main():
         access_token = do_oauth_setup(sess)
         config.set("general", "access_token", access_token.key)
         config.set("general", "access_token_secret", access_token.secret)
-        with open(args.config, "wb") as configfile:
+        with open(args['--config'], "wb") as configfile:
             config.write(configfile)
     else:
         sess.set_token(config.get("general", "access_token"),
@@ -482,11 +496,13 @@ def main():
         # Get the horizon in the past beyond which in the past we delete old
         # files
         #
-        then = arrow.utcnow().replace(days=-args.expiry)
+        then = arrow.utcnow().replace(days=-expiry)
 
         # Find the latest image file that we have already downloaded
         #
-        img_file, date_dir, year_dir = find_latest_downloaded_file(args.dir)
+        img_file, date_dir, year_dir = find_latest_downloaded_file(
+            args['--dir']
+        )
 
         # Convert the image file name in to a timestamp. I am going to be lazy
         # and just assume that the file name is in the proper format.
@@ -504,18 +520,19 @@ def main():
         # changed since the last time we asked.
         #
         try:
-            cur_dir_hash, files = get_dropbox_dir(client, args.dropbox_folder)
+            cur_dir_hash, files = get_dropbox_dir(client,
+                                                  dropbox_folder)
             if cur_dir_hash == last_dir_hash:
                 print "** Skipping loop. No changes in folder '%s'" % \
-                    args.dropbox_folder
-                sleep(args.interval)
+                    dropbox_folder
+                sleep(interval)
                 continue
 
             # First step rename all the files that have the old file pattern.
             #
             print "** Renaming existing files"
-            rename_dropbox_files(client, args.dropbox_folder, files,
-                                 args.dry_run)
+            rename_dropbox_files(client, dropbox_folder, files,
+                                 args['--dry_run'])
 
             # Second step, download all files that have appeared since the last
             # time we ran. We need to get the list of files again since we just
@@ -523,22 +540,22 @@ def main():
             # changing its hash)
             #
             print "** Downloading new files"
-            last_dir_hash, files = get_dropbox_dir(client, args.dropbox_folder)
-            download_new_files(client, args.dropbox_folder, args.dir, files,
-                               latest, args.dry_run)
+            last_dir_hash, files = get_dropbox_dir(client, dropbox_folder)
+            download_new_files(client, dropbox_folder, args['--dir'], files,
+                               latest, args['--dry_run'])
 
             # Finally (if '--delete' is set), delete files that are older a set
             # time (by default 7 days.)
             #
-            if args.delete:
+            if args['--delete']:
                 print "** Deleteing old files"
-                delete_old_files(client, args.dropbox_folder, files, then,
-                                 args.dry_run)
+                delete_old_files(client, dropbox_folder, files, then,
+                                 args['--dry_run'])
         except dropbox.rest.ErrorResponse, e:
             # If we got anything but a 200 raise an exception (why did
             # we get a 200?)
             #
-            if e.status not in (200,500):
+            if e.status not in (200, 500):
                 print "** Wuh? Got dropbox.rest.ErrorResponse: %s" % str(e)
                 raise e
             else:
@@ -546,20 +563,22 @@ def main():
         except dropbox.rest.RESTSocketError, e:
             # If we get a timeout, just continue on..
             #
-            if e.errno != 60:
-                raise e
-            else:
+            print "** Got errno from dropbox socket: %s" % repr(e)
+            if e.errno == 60:
                 print "** Connection to dropbox timed out."
+            else:
+                raise e
 
         # If we are doing a 'one run' then we immediate set 'running'
         # to false once we enter the loop so the loop will only run
         # once. Otherwise sleep..
         #
-        if args.one_run:
+        if args['--one_run']:
             running = False
         else:
-            print "*** %s Done run. Sleeping for %d" % (arrow.now().format('YYYY-MM-DD HH:mm:ss ZZ'),args.interval)
-            sleep(args.interval)
+            print ("*** %s Done run. Sleeping for %d" %
+                   (arrow.now().format('YYYY-MM-DD HH:mm:ss ZZ'), interval))
+            sleep(interval)
 
     print "+*+* Exiting main loop"
     return
@@ -574,4 +593,3 @@ if __name__ == "__main__":
 
 ############################################################################
 ############################################################################
-
